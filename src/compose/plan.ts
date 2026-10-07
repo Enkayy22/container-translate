@@ -127,7 +127,11 @@ export function selectServices(project: Project, names: string[], noDeps: boolea
     };
     for (const name of [...wanted]) visit(name);
   }
-  const services = project.services.filter((service) => wanted.has(service.name));
+  const services = project.services
+    .filter((service) => wanted.has(service.name))
+    .map((service) => noDeps
+      ? { ...service, dependsOn: service.dependsOn.filter((dep) => wanted.has(dep.service)) }
+      : service);
   if (services.length === 0) throw new TranslateError(`None of the requested services exist: ${names.join(', ')}.`);
   return { ...project, services };
 }

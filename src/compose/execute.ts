@@ -27,6 +27,7 @@ export async function executeUp(project: Project, bin: string, runtime: Runtime,
     await runAllowing(runtime, command.argv, EXISTS);
   }
 
+  const previous = options.removeOrphans ? readState(project.name) : null;
   const started: ServiceState[] = [];
   for (const planned of plan.services) {
     if (options.forceRecreate) await removeContainer(bin, runtime, planned.service.containerName);
@@ -41,7 +42,7 @@ export async function executeUp(project: Project, bin: string, runtime: Runtime,
     await waitIfHealthy(project, bin, runtime, planned.service);
   }
 
-  if (options.removeOrphans) await removeOrphans(bin, runtime, project.name, started);
+  if (previous) await removeRecordedOrphans(bin, runtime, previous, started);
   return plan;
 }
 
@@ -155,9 +156,12 @@ async function removeContainer(bin: string, runtime: Runtime, name: string): Pro
   await runAllowing(runtime, [bin, 'delete', '--force', name], MISSING);
 }
 
-async function removeOrphans(bin: string, runtime: Runtime, projectName: string, started: ServiceState[]): Promise<void> {
-  const previous = readState(projectName);
-  if (!previous) return;
+async function removeRecordedOrphans(
+  bin: string,
+  runtime: Runtime,
+  previous: ProjectState,
+  started: ServiceState[],
+): Promise<void> {
   const live = new Set(started.map((service) => service.containerName));
   for (const service of previous.services) {
     if (!live.has(service.containerName)) await removeContainer(bin, runtime, service.containerName);

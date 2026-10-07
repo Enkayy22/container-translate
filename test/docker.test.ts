@@ -69,6 +69,37 @@ describe('docker shim', () => {
     const translated = translateDocker(['swarm', 'init'], 'container');
     assert.equal(translated.kind, 'error');
   });
+
+  it('deletes containers and drops privileged and healthcheck flags', () => {
+    assert.deepEqual(argvOf(['rm', '-f', 'db']), [
+      'container', 'delete', '--force', 'db',
+    ]);
+    const translated = translateDocker([
+      'run', '--privileged', '--health-cmd', 'pg_isready', '--health-interval', '5s', 'postgres:15',
+    ], 'container');
+    assert.equal(translated.kind, 'exec');
+    if (translated.kind !== 'exec') return;
+    assert.deepEqual(translated.argv, ['container', 'run', 'postgres:15']);
+    assert.ok(translated.warnings.some((warning) => warning.includes('--privileged')));
+    assert.ok(translated.warnings.some((warning) => warning.includes('--health-cmd')));
+    assert.ok(translated.warnings.some((warning) => warning.includes('--health-interval')));
+  });
+
+  it('maps the remaining translated verbs', () => {
+    assert.deepEqual(argvOf(['build', '-t', 'app:1', '-f', 'Dockerfile', '.']), [
+      'container', 'build', '--tag', 'app:1', '--file', 'Dockerfile', '.',
+    ]);
+    assert.deepEqual(argvOf(['push', 'app:1']), ['container', 'image', 'push', 'app:1']);
+    assert.deepEqual(argvOf(['start', '-a', 'db']), ['container', 'start', '--attach', 'db']);
+    assert.deepEqual(argvOf(['stop', '-t', '10', 'db']), ['container', 'stop', '--time', '10', 'db']);
+    assert.deepEqual(argvOf(['kill', '-s', 'SIGTERM', 'db']), ['container', 'kill', '--signal', 'SIGTERM', 'db']);
+    assert.deepEqual(argvOf(['cp', 'db:/etc/hosts', './hosts']), ['container', 'copy', 'db:/etc/hosts', './hosts']);
+    assert.deepEqual(argvOf(['inspect', 'db']), ['container', 'inspect', 'db']);
+    assert.deepEqual(argvOf(['login', 'ghcr.io']), ['container', 'registry', 'login', 'ghcr.io']);
+    assert.deepEqual(argvOf(['create', '--name', 'job', 'alpine', 'echo', 'hi']), [
+      'container', 'create', '--name', 'job', 'alpine', 'echo', 'hi',
+    ]);
+  });
 });
 
 describe('compose argv', () => {
@@ -92,6 +123,50 @@ describe('compose argv', () => {
     assert.equal(logs.follow, true);
     assert.deepEqual(logs.files, ['docker-compose.kafka.yml']);
     assert.deepEqual(logs.services, ['kafka']);
+  });
+
+  it('parses project, profiles, repeated files, and the remaining commands', () => {
+    assert.deepEqual(parseComposeArgs([
+      '-p', 'demo',
+      '--profile', 'debug',
+      '-f', 'a.yml',
+      '-f', 'b.yml',
+      'up',
+      '--dry-run',
+      '--force-recreate',
+      '--remove-orphans',
+      '--no-deps',
+      'web',
+    ]), {
+      files: ['a.yml', 'b.yml'],
+      projectName: 'demo',
+      profiles: ['debug'],
+      command: 'up',
+      services: ['web'],
+      dryRun: true,
+      detach: false,
+      removeVolumes: false,
+      follow: false,
+      forceRecreate: true,
+      removeOrphans: true,
+      noDeps: true,
+      help: false,
+    });
+
+    const down = parseComposeArgs(['down', '-v']);
+    assert.equal(down.command, 'down');
+    assert.equal(down.removeVolumes, true);
+
+    for (const command of ['stop', 'start', 'restart', 'pull', 'ps', 'config', 'plan']) {
+      assert.equal(parseComposeArgs([command]).command, command);
+    }
+
+    const logs = parseComposeArgs(['logs', '--tail', '20', '-f', 'kafka']);
+    assert.equal(logs.follow, true);
+    assert.equal(logs.tail, '20');
+    assert.deepEqual(logs.services, ['kafka']);
+
+    assert.deepEqual(parseComposeArgs(['exec', 'web', 'sh', '-c', 'true']).services, ['web', 'sh', '-c', 'true']);
   });
 });
 
